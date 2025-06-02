@@ -1,7 +1,7 @@
 package main
 
 import (
-	curl "github.com/andelf/go-curl"
+	curl "github.com/BridgeSenseDev/go-curl-impersonate"
 	"os"
 )
 
@@ -16,7 +16,7 @@ func main() {
 	easy.Setopt(curl.OPT_URL, "ftp://ftp.gnu.org/README")
 
 	// define our callback use lambda function
-	easy.Setopt(curl.OPT_WRITEFUNCTION, func(ptr []byte, userdata interface{}) bool {
+	easy.Setopt(curl.OPT_WRITEFUNCTION, func(ptr []byte, userdata any) bool {
 		file := userdata.(*os.File)
 		if _, err := file.Write(ptr); err != nil {
 			return false

@@ -1,12 +1,8 @@
 package curl
 
 /*
-#cgo freebsd CFLAGS: -I/usr/local/include
-#cgo freebsd LDFLAGS: -L/usr/local/lib -lcurl
 #include <stdlib.h>
 #include <string.h>
-#include <curl/curl.h>
-
 */
 import "C"
 
@@ -15,30 +11,41 @@ import (
 )
 
 //export goCallHeaderFunction
-func goCallHeaderFunction(ptr *C.char, size C.size_t, ctx unsafe.Pointer) uintptr {
+func goCallHeaderFunction(ptr *C.char, size C.size_t, ctx unsafe.Pointer) C.size_t {
 	curl := context_map.Get(uintptr(ctx))
-	buf := C.GoBytes(unsafe.Pointer(ptr), C.int(size))
-	if (*curl.headerFunction)(buf, curl.headerData) {
-		return uintptr(size)
+	if curl == nil || curl.headerFunction == nil {
+		return 0
 	}
-	return C.CURL_WRITEFUNC_PAUSE
+	buf := C.GoBytes(unsafe.Pointer(ptr), C.int(size*1))
+
+	if (*curl.headerFunction)(buf, curl.headerData) {
+		return C.size_t(size * 1)
+	}
+	return GetCurlWritefuncPause()
 }
 
 //export goCallWriteFunction
-func goCallWriteFunction(ptr *C.char, size C.size_t, ctx unsafe.Pointer) uintptr {
+func goCallWriteFunction(ptr *C.char, size C.size_t, ctx unsafe.Pointer) C.size_t {
 	curl := context_map.Get(uintptr(ctx))
-	buf := C.GoBytes(unsafe.Pointer(ptr), C.int(size))
-	if (*curl.writeFunction)(buf, curl.writeData) {
-		return uintptr(size)
+	if curl == nil || curl.writeFunction == nil {
+		return 0
 	}
-	return C.CURL_WRITEFUNC_PAUSE
+	buf := C.GoBytes(unsafe.Pointer(ptr), C.int(size*1))
+
+	if (*curl.writeFunction)(buf, curl.writeData) {
+		return C.size_t(size * 1) // Return total bytes processed
+	}
+	return GetCurlWritefuncPause()
 }
 
 //export goCallProgressFunction
-func goCallProgressFunction(dltotal, dlnow, ultotal, ulnow C.double, ctx unsafe.Pointer) int {
+func goCallProgressFunction(dltotalC C.double, dlnowC C.double, ultotalC C.double, ulnowC C.double, ctx unsafe.Pointer) C.int {
 	curl := context_map.Get(uintptr(ctx))
-	if (*curl.progressFunction)(float64(dltotal), float64(dlnow),
-		float64(ultotal), float64(ulnow),
+	if curl == nil || curl.progressFunction == nil {
+		return 0
+	}
+	if (*curl.progressFunction)(float64(dltotalC), float64(dlnowC),
+		float64(ultotalC), float64(ulnowC),
 		curl.progressData) {
 		return 0
 	}
@@ -46,14 +53,27 @@ func goCallProgressFunction(dltotal, dlnow, ultotal, ulnow C.double, ctx unsafe.
 }
 
 //export goCallReadFunction
-func goCallReadFunction(ptr *C.char, size C.size_t, ctx unsafe.Pointer) uintptr {
+func goCallReadFunction(ptr *C.char, size C.size_t, numItems C.size_t, ctx unsafe.Pointer) C.size_t {
 	curl := context_map.Get(uintptr(ctx))
-	buf := C.GoBytes(unsafe.Pointer(ptr), C.int(size))
-	ret := (*curl.readFunction)(buf, curl.readData)
-	str := C.CString(string(buf))
-	defer C.free(unsafe.Pointer(str))
-	if C.memcpy(unsafe.Pointer(ptr), unsafe.Pointer(str), C.size_t(ret)) == nil {
-		panic("read_callback memcpy error!")
+	if curl == nil || curl.readFunction == nil {
+		return GetCurlReadfuncAbort()
 	}
-	return uintptr(ret)
+
+	maxLenToRead := int(size * numItems)
+	if maxLenToRead == 0 {
+		return 0
+	}
+
+	goSliceForReading := unsafe.Slice((*byte)(unsafe.Pointer(ptr)), maxLenToRead)
+	bytesWrittenByGoFunc := (*curl.readFunction)(goSliceForReading, curl.readData)
+
+	if bytesWrittenByGoFunc < 0 {
+		return GetCurlReadfuncAbort()
+	}
+
+	if bytesWrittenByGoFunc > maxLenToRead {
+		return GetCurlReadfuncAbort()
+	}
+
+	return C.size_t(bytesWrittenByGoFunc)
 }

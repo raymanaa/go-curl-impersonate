@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="ALL" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="291bc910-56b0-4a05-8b1a-7b0ab8795d8f" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/const_gen_others.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.travis.yml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/c-callback.c" beforeDir="false" afterPath="$PROJECT_DIR$/c-callback.c" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/callback.go" beforeDir="false" afterPath="$PROJECT_DIR$/callback.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/const.go" beforeDir="false" afterPath="$PROJECT_DIR$/const_others.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/const_gen.go" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/core.go" beforeDir="false" afterPath="$PROJECT_DIR$/core.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/core_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/core_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/easy.go" beforeDir="false" afterPath="$PROJECT_DIR$/easy.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/easy_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/easy_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/examples/channal_callback.go" beforeDir="false" afterPath="$PROJECT_DIR$/examples/channal_callback.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/examples/ftpget.go" beforeDir="false" afterPath="$PROJECT_DIR$/examples/ftpget.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/examples/https.go" beforeDir="false" afterPath="$PROJECT_DIR$/examples/https.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/examples/https_callback.go" beforeDir="false" afterPath="$PROJECT_DIR$/examples/https_callback.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/examples/https_skip_peer_verify.go" beforeDir="false" afterPath="$PROJECT_DIR$/examples/https_skip_peer_verify.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/examples/misc.go" beforeDir="false" afterPath="$PROJECT_DIR$/examples/misc.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/examples/multi_and_select.go" beforeDir="false" afterPath="$PROJECT_DIR$/examples/multi_and_select.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/examples/multi_sample.go" beforeDir="false" afterPath="$PROJECT_DIR$/examples/multi_sample.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/examples/post-callback.go" beforeDir="false" afterPath="$PROJECT_DIR$/examples/post-callback.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/examples/progress.go" beforeDir="false" afterPath="$PROJECT_DIR$/examples/progress.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/examples/renren_login.go" beforeDir="false" afterPath="$PROJECT_DIR$/examples/renren_login.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/examples/renren_upload.go" beforeDir="false" afterPath="$PROJECT_DIR$/examples/renren_upload.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/examples/sendrecv.go" beforeDir="false" afterPath="$PROJECT_DIR$/examples/sendrecv.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/examples/sepheaders.go" beforeDir="false" afterPath="$PROJECT_DIR$/examples/sepheaders.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/examples/simple.go" beforeDir="false" afterPath="$PROJECT_DIR$/examples/simple.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/go.mod" beforeDir="false" afterPath="$PROJECT_DIR$/go.mod" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/logging.go" beforeDir="false" afterPath="$PROJECT_DIR$/logging.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/misc/codegen.py" beforeDir="false" afterPath="$PROJECT_DIR$/misc/codegen.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/misc/compatgen.py" beforeDir="false" afterPath="$PROJECT_DIR$/misc/compatgen.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/multi.go" beforeDir="false" afterPath="$PROJECT_DIR$/multi.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/share.go" beforeDir="false" afterPath="$PROJECT_DIR$/share.go" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="GOROOT" url="file://$USER_HOME$/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.2.windows-amd64" />
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;BridgeSenseDev&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings"><![CDATA[{
+  "selectedUrlAndAccountId": {
+    "url": "https://github.com/BridgeSenseDev/go-curl-impersonate.git",
+    "accountId": "eb024e5d-107d-47c5-9c76-3e507310c943"
+  }
+}]]></component>
+  <component name="ProjectColorInfo">{
+  &quot;customColor&quot;: &quot;&quot;,
+  &quot;associatedIndex&quot;: 6
+}</component>
+  <component name="ProjectId" id="2xuc5w93bG68xrtHq2hUlPVC8W8" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.go.formatter.settings.were.checked&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.go.migrated.go.modules.settings&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.go.modules.go.list.on.any.changes.was.set&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
+    &quot;go.import.settings.migrated&quot;: &quot;true&quot;,
+    &quot;go.sdk.automatically.set&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;C:/Users/BridgeSense&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;
+  }
+}</component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-gosdk-5df93f7ad4aa-dfc284eb1eb8-org.jetbrains.plugins.go.sharedIndexes.bundled-GO-242.20224.424" />
+        <option value="bundled-js-predefined-d6986cc7102b-410509235cf1-JavaScript-GO-242.20224.424" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="VgoProject">
+    <settings-migrated>true</settings-migrated>
+  </component>
+</project>

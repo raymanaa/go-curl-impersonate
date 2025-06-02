@@ -1,7 +1,7 @@
 package main
 
 import (
-	curl "github.com/andelf/go-curl"
+	curl "github.com/BridgeSenseDev/go-curl-impersonate"
 	"time"
 )
 
@@ -20,7 +20,7 @@ func main() {
 	easy.Setopt(curl.OPT_VERBOSE, true)
 
 	easy.Setopt(curl.OPT_READFUNCTION,
-		func(ptr []byte, userdata interface{}) int {
+		func(ptr []byte, userdata any) int {
 			// WARNING: never use append()
 			if !sent {
 				sent = true

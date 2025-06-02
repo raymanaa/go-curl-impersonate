@@ -3,7 +3,7 @@ package main
 
 import (
 	"fmt"
-	curl "github.com/andelf/go-curl"
+	curl "github.com/BridgeSenseDev/go-curl-impersonate"
 	"regexp"
 	"time"
 )
@@ -18,7 +18,7 @@ func getUploadUrl() string {
 	easy.Setopt(curl.OPT_COOKIEFILE, "./cookie.jar")
 	easy.Setopt(curl.OPT_COOKIEJAR, "./cookie.jar")
 	easy.Setopt(curl.OPT_VERBOSE, true)
-	easy.Setopt(curl.OPT_WRITEFUNCTION, func(ptr []byte, _ interface{}) bool {
+	easy.Setopt(curl.OPT_WRITEFUNCTION, func(ptr []byte, _ any) bool {
 		page += string(ptr)
 		return true
 	})
@@ -63,7 +63,7 @@ func main() {
 
 	// print upload progress
 	easy.Setopt(curl.OPT_NOPROGRESS, false)
-	easy.Setopt(curl.OPT_PROGRESSFUNCTION, func(dltotal, dlnow, ultotal, ulnow float64, _ interface{}) bool {
+	easy.Setopt(curl.OPT_PROGRESSFUNCTION, func(dltotal, dlnow, ultotal, ulnow float64, _ any) bool {
 		fmt.Printf("Download %3.2f%%, Uploading %3.2f%%\r", dlnow/dltotal*100, ulnow/ultotal*100)
 		return true
 	})

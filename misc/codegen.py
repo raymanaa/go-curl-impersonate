@@ -1,97 +1,117 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-""" codegen.py reads curl project's curl.h, outputting go-curl's const_gen.go
-
-codegen.py should be run from the go-curl source root, where it will
-attempt to locate 'curl.h' in the locations defined by `target_dirs`.
-
-
-CURL_GIT_PATH (if defined) must point to the location of your curl source
-repository. For example you might check out curl from
-https://github.com/curl/curl and have that saved to your local
-directory `/Users/example-home/git/curl`
-
-Usage:
-
-CURL_GIT_PATH=/path-to-git-repos/curl ./misc/codegen.py
-
-Example:
-CURL_GIT_PATH=/Users/example-user/Projects/c/curl python3 ./misc/codegen.py
-
-File Input:
-(curl project) include/curl/header.h
-
-File Output:
-const_gen.go
-
-Todo:
-* Further code review ("help wanted")
-* More docstrings/help. Error checking. Cleanup redefined variable scopes.
-"""
+"""codegen.py reads curl project's curl.h and spits out
+go‐curl's const_gen_others.go (cgo) and const_gen_windows.go (pure Go)."""
 
 import os
 import re
+import traceback
 
-# CURL_GIT_PATH is the location you git checked out the curl project.
-# You will need to supply this variable and value when invoking this script.
-CURL_GIT_PATH = os.environ.get("CURL_GIT_PATH", './curl')
+LOCAL_PATCHED_CURL_H_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "libs", "include", "curl"
+)
 
-target_dirs = [
-    '{}/include/curl'.format(CURL_GIT_PATH),
-    '/usr/local/include',
-    'libdir/gcc/target/version/include'
-    '/usr/target/include',
-    '/usr/include',
-]
 
 def get_curl_path() -> str:
-    for d in target_dirs:
-        for root, dirs, files in os.walk(d):
-            if 'curl.h' in files:
-                return os.path.join(root, 'curl.h')
-    raise Exception("Not found")
+    print("Attempting to get curl.h path...")
+    possible = os.path.join(LOCAL_PATCHED_CURL_H_DIR, "curl.h")
+    if os.path.exists(possible):
+        print(f"Found curl.h at: {possible}")
+        return possible
+
+    for base in ("/usr/local/include", "/usr/target/include", "/usr/include"):
+        if os.path.exists(base):
+            for root, _, files in os.walk(base, onerror=lambda e: None):
+                if "curl.h" in files and root.endswith(os.sep + "curl"):
+                    path = os.path.join(root, "curl.h")
+                    print(f"Found curl.h via os.walk: {path}")
+                    return path
+
+    raise FileNotFoundError(
+        f"curl.h not found in {LOCAL_PATCHED_CURL_H_DIR} or system include paths."
+    )
 
 
-opts = []
-codes = []
-infos = []
-auths = []
-init_pattern = re.compile(r'CINIT\((.*?),\s+(LONG|OBJECTPOINT|FUNCTIONPOINT|STRINGPOINT|OFF_T),\s+(\d+)\)')
-error_pattern = re.compile('^\s+(CURLE_[A-Z_0-9]+),')
-info_pattern = re.compile('^\s+(CURLINFO_[A-Z_0-9]+)\s+=')
+def preprocess_c_header_content(content: str) -> str:
+    """Strip continuations and comments."""
+    lines = []
+    buff = ""
+    for raw in content.splitlines():
+        t = raw.rstrip()
+        if t.endswith("\\"):
+            buff += t[:-1]
+        else:
+            buff += t
+            lines.append(buff)
+            buff = ""
+    if buff:
+        lines.append(buff)
 
-with open(get_curl_path()) as f:
-    for line in f:
-        match = init_pattern.findall(line)
-        if match:
-            opts.append(match[0][0])
-        if line.startswith('#define CURLOPT_'):
-            o = line.split()
-            opts.append(o[1][8:])  # strip :(
+    out = []
+    for L in lines:
+        # strip // comments
+        L = L.split("//", 1)[0]
+        # strip /* ... */ pairs
+        while "/*" in L and "*/" in L:
+            pre, rest = L.split("/*", 1)
+            _, post = rest.split("*/", 1)
+            L = pre + " " + post
+        if L.strip():
+            out.append(L.strip())
+    print(f"Preprocessing finished. {len(out)} lines.")
+    return "\n".join(out)
 
-        if line.startswith('#define CURLAUTH_'):
-            o = line.split()
-            auths.append(o[1][9:])
 
-        match = error_pattern.findall(line)
-        if match:
-            codes.append(match[0])
+def evaluate_c_expr(expr, defines, orig, depth=0, max_depth=30):
+    """Recursively substitute defines, strip U/L suffixes, and eval simple math."""
+    e = expr.strip()
+    # remove casts
+    e = re.sub(r"\(\s*(?:unsigned\s+long|long|int|curl_off_t)\s*\)", "", e)
+    # strip U/L suffixes only on numeric literals
+    e = re.sub(r"(?<![\w])(0x[0-9A-Fa-f]+|\d+)([uUlL]+)\b", r"\1", e)
+    e = e.strip()
 
-        if line.startswith('#define CURLE_'):
-            c = line.split()
-            codes.append(c[1])
+    # if it's now a bare integer or hex, return decimal
+    if re.fullmatch(r"-?\d+", e):
+        return e
+    if re.fullmatch(r"0[xX][0-9A-Fa-f]+", e):
+        try:
+            return str(int(e, 0))
+        except:
+            pass
 
-        match = info_pattern.findall(line)
-        if match:
-            infos.append(match[0])
+    # substitute known defines
+    if depth < max_depth:
+        for name, val in sorted(defines.items(), key=lambda x: -len(x[0])):
+            # only whole‐word matches
+            pat = r"\b" + re.escape(name) + r"\b"
+            if re.search(pat, e):
+                # resolve that define
+                if re.fullmatch(r"-?\d+|0[xX][0-9A-Fa-f]+", val.strip()):
+                    sub = val.strip()
+                elif val.strip() == name:
+                    sub = name
+                else:
+                    sub = evaluate_c_expr(val, defines, name, depth + 1, max_depth)
+                e = re.sub(pat, sub, e)
+        # if anything changed, try again
+        # (we don't need an inner loop; the outer recursion covers it)
 
-        if line.startswith('#define CURLINFO_'):
-            i = line.split()
-            if '0x' not in i[2]:  # :(
-                infos.append(i[1])
+    # if anything alphabetic remains, bail out
+    if re.search(r"[A-Za-z_]", e):
+        return e
 
-template = """//go:generate /usr/bin/env python ./misc/codegen.py
+    # else eval arithmetic
+    try:
+        return str(int(eval(e, {})))
+    except:
+        return e
+
+
+# --- templates, auth removed ---
+cgo_template = """//go:build !windows
+// Code generated by misc/codegen.py. DO NOT EDIT.
 
 package curl
 /*
@@ -105,47 +125,229 @@ const (
 {code_part}
 )
 
-// easy.Setopt(flag, ...)
+// EasyOpt is the type for easy.Setopt(flag, ...) option constants.
+type EasyOpt int
+// EasyOpt constants
 const (
 {opt_part}
 )
 
-// easy.Getinfo(flag)
+// Info is the type for easy.Getinfo(flag) option constants.
+type Info int
+// Info constants
 const (
 {info_part}
-)
-
-// Auth
-const (
-{auth_part}
 )
 
 // generated ends
 """
 
-code_part = []
-for c in codes:
-    code_part.append("\t{:<25} = C.{}".format(c[4:], c))
+windows_template = """//go:build windows
+// Code generated by misc/codegen.py. DO NOT EDIT.
 
-code_part = '\n'.join(code_part)
+package curl
 
-opt_part = []
-for o in opts:
-    opt_part.append("\tOPT_{0:<25} = C.CURLOPT_{0}".format(o))
+// CURLcode
+const (
+{code_part}
+)
 
-opt_part = '\n'.join(opt_part)
+// EasyOpt is the type for easy.Setopt(flag, ...) option constants.
+type EasyOpt int
+// EasyOpt constants
+const (
+{opt_part}
+)
 
-info_part = []
-for i in infos:
-    info_part.append("\t{:<25} = C.{}".format(i[4:], i))
+// Info is the type for easy.Getinfo(flag) option constants.
+type Info int
+// Info constants
+const (
+{info_part}
+)
 
-info_part = '\n'.join(info_part)
+// generated ends
+"""
 
-auth_part = []
-for a in auths:
-    auth_part.append("\tAUTH_{0:<25} = C.CURLAUTH_{0} & (1<<32 - 1)".format(a))
 
-auth_part = '\n'.join(auth_part)
+def main():
+    print("Starting codegen.py main function...")
+    try:
+        curl_h = get_curl_path()
+        text = open(curl_h, "r", encoding="utf-8").read()
+        lines = preprocess_c_header_content(text).splitlines()
 
-with open('./const_gen.go', 'w', encoding="utf-8") as fp:
-    fp.write(template.format(**locals()))
+        # 1) collect all #defines
+        defines = {}
+        p_def = re.compile(r"^\s*#define\s+([A-Za-z_][A-Za-z0-9_]*)\s+(.+)")
+        for L in lines:
+            m = p_def.match(L)
+            if m:
+                defines[m.group(1)] = m.group(2).strip()
+
+        # 2) patterns for opts, codes, infos
+        init_pat = re.compile(
+            r"CINIT\s*\(\s*([A-Z0-9_]+)\s*,\s*(LONG|OBJECTPOINT|FUNCTIONPOINT|STRINGPOINT|OFF_T|BLOB|VALUES|CBPOINT)\s*,\s*(\d+)\s*\)"
+        )
+        curlopt_pat = re.compile(
+            r"CURLOPT\s*\(\s*(CURLOPT_[A-Z0-9_]+)\s*,\s*(CURLOPTTYPE_[A-Z0-9_]+)\s*,\s*(\d+)\s*\)"
+        )
+        define_opt_pat = re.compile(r"^\s*#define\s+(CURLOPT_[A-Z0-9_]+)\s+(.+)$")
+        enum_code_pat = re.compile(r"^\s*(CURLE_[A-Z0-9_]+)\s*(?:=\s*([^,]+))?,?")
+        enum_info_pat = re.compile(r"^\s*(CURLINFO_[A-Z0-9_]+)\s*(?:=\s*([^,]+))?,?")
+
+        raw = {"opts": [], "codes": [], "infos": []}
+        seen = {k: set() for k in raw}
+
+        curle_counter = 0
+        curlinfo_counter = 0
+
+        for L in lines:
+            # EasyOpts via CINIT
+            m = init_pat.search(L)
+            if m:
+                suf, typ, off = m.groups()
+                cn = f"CURLOPT_{suf}"
+                expr = f"CURLOPTTYPE_{typ} + {off}"
+                if cn not in seen["opts"]:
+                    raw["opts"].append({"go": suf, "c": cn, "e": expr})
+                    seen["opts"].add(cn)
+                continue
+
+            # EasyOpts via CURLOPT(...)
+            m = curlopt_pat.search(L)
+            if m:
+                cn, typ, off = m.groups()
+                go = cn[len("CURLOPT_") :]
+                expr = f"{typ} + {off}"
+                if cn not in seen["opts"]:
+                    raw["opts"].append({"go": go, "c": cn, "e": expr})
+                    seen["opts"].add(cn)
+                continue
+
+            # EasyOpts via #define
+            m = define_opt_pat.match(L)
+            if m:
+                cn, rhs = m.groups()
+                go = cn[len("CURLOPT_") :]
+                expr = rhs.strip()
+                if expr.startswith("(") and expr.endswith(")"):
+                    expr = expr[1:-1].strip()
+                if cn not in seen["opts"]:
+                    raw["opts"].append({"go": go, "c": cn, "e": expr})
+                    seen["opts"].add(cn)
+                continue
+
+            # Error codes via enum
+            m = enum_code_pat.match(L)
+            if m:
+                cn, val = m.groups()
+                go = cn[len("CURLE_") :]
+                expr = val.strip() if val else str(curle_counter)
+                if cn not in seen["codes"]:
+                    raw["codes"].append({"go": go, "c": cn, "e": expr})
+                    seen["codes"].add(cn)
+                # bump counter
+                if not val:
+                    curle_counter += 1
+                else:
+                    try:
+                        curle_counter = int(evaluate_c_expr(val, defines, cn)) + 1
+                    except:
+                        pass
+                continue
+
+            # Info via #define
+            if L.startswith("#define CURLINFO_"):
+                parts = L.split(None, 2)
+                cn, rhs = parts[1], parts[2]
+                go = cn[len("CURLINFO_") :]
+                expr = rhs.strip()
+                if expr.startswith("(") and expr.endswith(")"):
+                    expr = expr[1:-1].strip()
+                if cn not in seen["infos"]:
+                    raw["infos"].append({"go": go, "c": cn, "e": expr})
+                    seen["infos"].add(cn)
+                curlinfo_counter = -1
+                continue
+
+            # Info via enum
+            if curlinfo_counter != -1:
+                m = enum_info_pat.match(L)
+                if m:
+                    cn, val = m.groups()
+                    go = cn[len("CURLINFO_") :]
+                    expr = val.strip() if val else str(curlinfo_counter)
+                    if cn not in seen["infos"]:
+                        raw["infos"].append({"go": go, "c": cn, "e": expr})
+                        seen["infos"].add(cn)
+                    if not val:
+                        curlinfo_counter += 1
+                    else:
+                        try:
+                            curlinfo_counter = (
+                                int(evaluate_c_expr(val, defines, cn)) + 1
+                            )
+                        except:
+                            pass
+                    continue
+
+        # sort each category by go name
+        for cat in raw:
+            raw[cat].sort(key=lambda x: x["go"])
+
+        # --- generate const_gen_others.go (cgo) ---
+        code_part = "\n".join(f"\tE_{d['go']:<25} = C.{d['c']}" for d in raw["codes"])
+        opt_part = "\n".join(
+            f"\tOPT_{d['go']:<25} EasyOpt = C.{d['c']}" for d in raw["opts"]
+        )
+        info_part = "\n".join(
+            f"\tINFO_{d['go']:<25} Info = C.{d['c']}" for d in raw["infos"]
+        )
+
+        out_cgo = os.path.join(os.path.dirname(__file__), "..", "const_gen_others.go")
+        with open(out_cgo, "w", encoding="utf-8") as f:
+            f.write(
+                cgo_template.format(
+                    code_part=code_part,
+                    opt_part=opt_part,
+                    info_part=info_part,
+                )
+            )
+        print("Written", out_cgo)
+
+        # --- generate const_gen_windows.go ---
+        win_codes = []
+        for d in raw["codes"]:
+            v = evaluate_c_expr(d["e"], defines, d["c"])
+            if re.fullmatch(r"-?\d+", v):
+                win_codes.append(f"\tE_{d['go']:<25} = {v}")
+        win_opts = []
+        for d in raw["opts"]:
+            v = evaluate_c_expr(d["e"], defines, d["c"])
+            if re.fullmatch(r"-?\d+", v):
+                win_opts.append(f"\tOPT_{d['go']:<25} EasyOpt = {v}")
+        win_infos = []
+        for d in raw["infos"]:
+            v = evaluate_c_expr(d["e"], defines, d["c"])
+            if re.fullmatch(r"-?\d+", v):
+                win_infos.append(f"\tINFO_{d['go']:<25} Info = {v}")
+
+        out_win = os.path.join(os.path.dirname(__file__), "..", "const_gen_windows.go")
+        with open(out_win, "w", encoding="utf-8") as f:
+            f.write(
+                windows_template.format(
+                    code_part="\n".join(win_codes),
+                    opt_part="\n".join(win_opts),
+                    info_part="\n".join(win_infos),
+                )
+            )
+        print("Written", out_win)
+
+    except Exception:
+        traceback.print_exc()
+        raise
+
+
+if __name__ == "__main__":
+    main()

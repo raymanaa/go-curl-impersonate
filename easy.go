@@ -2,95 +2,32 @@ package curl
 
 /*
 #include <stdlib.h>
-#include <curl/curl.h>
-#include "callback.h"
-#include "compat.h"
-
-static CURLcode curl_easy_setopt_long(CURL *handle, CURLoption option, long parameter) {
-  return curl_easy_setopt(handle, option, parameter);
-}
-static CURLcode curl_easy_setopt_string(CURL *handle, CURLoption option, char *parameter) {
-  return curl_easy_setopt(handle, option, parameter);
-}
-static CURLcode curl_easy_setopt_slist(CURL *handle, CURLoption option, struct curl_slist *parameter) {
-  return curl_easy_setopt(handle, option, parameter);
-}
-static CURLcode curl_easy_setopt_pointer(CURL *handle, CURLoption option, void *parameter) {
-  return curl_easy_setopt(handle, option, parameter);
-}
-static CURLcode curl_easy_setopt_off_t(CURL *handle, CURLoption option, off_t parameter) {
-  return curl_easy_setopt(handle, option, parameter);
-}
-
-static CURLcode curl_easy_getinfo_string(CURL *curl, CURLINFO info, char **p) {
- return curl_easy_getinfo(curl, info, p);
-}
-static CURLcode curl_easy_getinfo_long(CURL *curl, CURLINFO info, long *p) {
- return curl_easy_getinfo(curl, info, p);
-}
-static CURLcode curl_easy_getinfo_double(CURL *curl, CURLINFO info, double *p) {
- return curl_easy_getinfo(curl, info, p);
-}
-static CURLcode curl_easy_getinfo_slist(CURL *curl, CURLINFO info, struct curl_slist **p) {
- return curl_easy_getinfo(curl, info, p);
-}
-
-static CURLFORMcode curl_formadd_name_content_length(
-    struct curl_httppost **httppost, struct curl_httppost **last_post, char *name, char *content, int length) {
-    return curl_formadd(httppost, last_post,
-                        CURLFORM_COPYNAME, name,
-                        CURLFORM_COPYCONTENTS, content,
-                        CURLFORM_CONTENTSLENGTH, length, CURLFORM_END);
-}
-static CURLFORMcode curl_formadd_name_content_length_type(
-    struct curl_httppost **httppost, struct curl_httppost **last_post, char *name, char *content, int length, char *type) {
-    return curl_formadd(httppost, last_post,
-                        CURLFORM_COPYNAME, name,
-                        CURLFORM_COPYCONTENTS, content,
-                        CURLFORM_CONTENTSLENGTH, length,
-                        CURLFORM_CONTENTTYPE, type, CURLFORM_END);
-}
-static CURLFORMcode curl_formadd_name_file_type(
-    struct curl_httppost **httppost, struct curl_httppost **last_post, char *name, char *filename, char *type) {
-    return curl_formadd(httppost, last_post,
-                        CURLFORM_COPYNAME, name,
-                        CURLFORM_FILE, filename,
-                        CURLFORM_CONTENTTYPE, type, CURLFORM_END);
-}
- // TODO: support multi file
-
 */
 import "C"
 
 import (
 	"fmt"
+	"io"
 	"mime"
+	"os"
 	"path"
+	"runtime"
 	"sync"
 	"unsafe"
 )
 
-type CurlInfo C.CURLINFO
-type CurlError C.CURLcode
+func stringToCUCharPtr(s string) (ptr uintptr, keepAlive []byte) {
+	b := []byte(s)
+	b = append(b, 0)
 
-type CurlString *C.char
-
-func NewCurlString(s string) CurlString {
-	return CurlString(unsafe.Pointer(C.CString(s)))
+	if len(b) == 0 {
+		return 0, b
+	}
+	return uintptr(unsafe.Pointer(&b[0])), b
 }
 
-func FreeCurlString(s CurlString) {
-	C.free(unsafe.Pointer(s))
-}
-
-func (e CurlError) Error() string {
-	// ret is const char*, no need to free
-	ret := C.curl_easy_strerror(C.CURLcode(e))
-	return fmt.Sprintf("curl: %s", C.GoString(ret))
-}
-
-func newCurlError(errno C.CURLcode) error {
-	if errno == C.CURLE_OK { // if nothing wrong
+func newCurlError(errno CurlCode) error {
+	if errno == E_OK {
 		return nil
 	}
 	return CurlError(errno)
@@ -98,19 +35,15 @@ func newCurlError(errno C.CURLcode) error {
 
 // curl_easy interface
 type CURL struct {
-	handle unsafe.Pointer
-	// callback functions, bool ret means ok or not
-	headerFunction, writeFunction *func([]byte, interface{}) bool
-	readFunction                  *func([]byte, interface{}) int // return num of bytes writed to buf
-	progressFunction              *func(float64, float64, float64, float64, interface{}) bool
-	fnmatchFunction               *func(string, string, interface{}) int
-	// callback datas
-	headerData, writeData, readData, progressData, fnmatchData interface{}
-	// list of C allocs
-	mallocAllocs []*C.char
+	handle                                        unsafe.Pointer
+	headerFunction                                *func([]byte, any) bool
+	writeFunction                                 *func([]byte, any) bool
+	readFunction                                  *func([]byte, any) int
+	progressFunction                              *func(float64, float64, float64, float64, any) bool
+	headerData, writeData, readData, progressData any
+	mallocAllocs                                  []unsafe.Pointer
 }
 
-// concurrent safe context map
 type contextMap struct {
 	items map[uintptr]*CURL
 	sync.RWMutex
@@ -125,9 +58,9 @@ func (c *contextMap) Set(k uintptr, v *CURL) {
 
 func (c *contextMap) Get(k uintptr) *CURL {
 	c.RLock()
-	defer c.RUnlock()
-
-	return c.items[k]
+	v := c.items[k]
+	c.RUnlock()
+	return v
 }
 
 func (c *contextMap) Delete(k uintptr) {
@@ -143,16 +76,43 @@ var context_map = &contextMap{
 
 // curl_easy_init - Start a libcurl easy session
 func EasyInit() *CURL {
-	p := C.curl_easy_init()
-	c := &CURL{handle: p, mallocAllocs: make([]*C.char, 0)} // other field defaults to nil
+	certPath, err := getEmbeddedCACertPath()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Could not prepare embedded CA certificate: %v. SSL connections may fail.\n", err)
+	}
+
+	p := CurlEasyInit()
+	if p == nil {
+		if runtime.GOOS == "windows" && CheckLoad() != nil {
+			panic(fmt.Errorf("curl: EasyInit failed because DLL could not be loaded: %v", CheckLoad()))
+		}
+		panic("curl: EasyInit returned a nil handle")
+	}
+	c := &CURL{handle: p, mallocAllocs: make([]unsafe.Pointer, 0)}
 	context_map.Set(uintptr(p), c)
+
+	if certPath != "" {
+		err = c.Setopt(OPT_CAINFO, certPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: Failed to set CURLOPT_CAINFO to '%s': %v. SSL connections may fail.\n", certPath, err)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "Error: Embedded CA certificate path is empty. CURLOPT_CAINFO not set.")
+	}
+
 	return c
 }
 
 // curl_easy_duphandle - Clone a libcurl session handle
 func (curl *CURL) Duphandle() *CURL {
-	p := C.curl_easy_duphandle(curl.handle)
-	c := &CURL{handle: p}
+	if curl.handle == nil {
+		panic("curl: Duphandle called on a nil handle")
+	}
+	p := CurlEasyDuph(curl.handle)
+	if p == nil {
+		panic("curl: Duphandle returned a nil handle")
+	}
+	c := &CURL{handle: p, mallocAllocs: make([]unsafe.Pointer, 0)}
 	context_map.Set(uintptr(p), c)
 	return c
 }
@@ -160,265 +120,476 @@ func (curl *CURL) Duphandle() *CURL {
 // curl_easy_cleanup - End a libcurl easy session
 func (curl *CURL) Cleanup() {
 	p := curl.handle
-	C.curl_easy_cleanup(p)
-	curl.MallocFreeAfter(0)
-	context_map.Delete(uintptr(p))
+	if p != nil {
+		CurlEasyCleanup(p)
+		curl.MallocFreeAfter(0)
+		context_map.Delete(uintptr(p))
+		curl.handle = nil
+	}
 }
 
 // curl_easy_setopt - set options for a curl easy handle
 // WARNING: a function pointer is &fun, but function addr is reflect.ValueOf(fun).Pointer()
-func (curl *CURL) Setopt(opt int, param interface{}) error {
+func (curl *CURL) Setopt(opt EasyOpt, param any) error {
 	p := curl.handle
-	if param == nil {
-		// NOTE: some option will crash program when got a nil param
-		return newCurlError(C.curl_easy_setopt_pointer(p, C.CURLoption(opt), nil))
+	if p == nil {
+		return fmt.Errorf("curl: easy handle is nil")
 	}
-	switch {
-	// not really set
-	case opt == OPT_READDATA: // OPT_INFILE
-		curl.readData = param
-		return nil
-	case opt == OPT_PROGRESSDATA:
-		curl.progressData = param
-		return nil
-	case opt == OPT_HEADERDATA: // also known as OPT_WRITEHEADER
-		curl.headerData = param
-		return nil
-	case opt == OPT_WRITEDATA: // OPT_FILE
-		curl.writeData = param
-		return nil
 
-	case opt == OPT_READFUNCTION:
-		fun := param.(func([]byte, interface{}) int)
-		curl.readFunction = &fun
-
-		ptr := C.return_read_function()
-		if err := newCurlError(C.curl_easy_setopt_pointer(p, C.CURLoption(opt), ptr)); err == nil {
-			return newCurlError(C.curl_easy_setopt_pointer(p, OPT_READDATA, unsafe.Pointer(curl.handle)))
-		} else {
-			return err
+	switch opt {
+	case OPT_WRITEDATA:
+		w, ok := param.(io.Writer)
+		if !ok {
+			return fmt.Errorf("curl: expected io.Writer for WRITEDATA, got %T", param)
 		}
+		curl.writeData = w
+		return newCurlError(CurlEasySetoptPointer(p, int(opt), unsafe.Pointer(p)))
+	case OPT_WRITEFUNCTION:
+		if param == nil {
+			curl.writeFunction = nil
+			return newCurlError(CurlEasySetoptFunction(p, int(opt), unsafe.Pointer((*struct{})(nil))))
+		}
+		f, ok := param.(func([]byte, any) bool)
+		if !ok {
+			return fmt.Errorf(
+				"curl: expected func([]byte,any)bool for WRITEFUNCTION, got %T",
+				param,
+			)
+		}
+		curl.writeFunction = &f
+		if errCode := CurlEasySetoptPointer(p, int(OPT_WRITEDATA), unsafe.Pointer(p)); errCode != 0 {
+			return newCurlError(errCode)
+		}
+		return newCurlError(
+			CurlEasySetoptFunction(p, int(opt), GetWriteCallbackFuncptr()),
+		)
 
-	case opt == OPT_PROGRESSFUNCTION:
-		fun := param.(func(float64, float64, float64, float64, interface{}) bool)
+	case OPT_READFUNCTION:
+		if param == nil {
+			curl.readFunction = nil
+			curl.readData = nil
+			return newCurlError(CurlEasySetoptFunction(p, int(opt), unsafe.Pointer((*struct{})(nil))))
+		}
+		if errCode := CurlEasySetoptPointer(p, int(OPT_READDATA), unsafe.Pointer(p)); errCode != 0 {
+			return newCurlError(errCode)
+		}
+		return newCurlError(CurlEasySetoptFunction(p, int(opt), GetReadCallbackFuncptr()))
+
+	case OPT_HEADERFUNCTION:
+		if param == nil {
+			curl.headerFunction = nil
+			curl.headerData = nil
+			return newCurlError(CurlEasySetoptFunction(p, int(opt), unsafe.Pointer((*struct{})(nil))))
+		}
+		if errCode := CurlEasySetoptPointer(p, int(OPT_HEADERDATA), unsafe.Pointer(p)); errCode != 0 {
+			return newCurlError(errCode)
+		}
+		return newCurlError(CurlEasySetoptFunction(p, int(opt), GetHeaderCallbackFuncptr()))
+
+	case OPT_XFERINFOFUNCTION:
+		if param == nil {
+			curl.progressFunction = nil
+			curl.progressData = nil
+			return newCurlError(CurlEasySetoptFunction(p, int(opt), unsafe.Pointer((*struct{})(nil))))
+		}
+		fun, ok := param.(func(float64, float64, float64, float64, any) bool)
+		if !ok {
+			return fmt.Errorf("curl: expected func(float64, float64, float64, float64, any) bool for XFERINFOFUNCTION, got %T", param)
+		}
 		curl.progressFunction = &fun
-
-		ptr := C.return_progress_function()
-		if err := newCurlError(C.curl_easy_setopt_pointer(p, C.CURLoption(opt), ptr)); err == nil {
-			return newCurlError(C.curl_easy_setopt_pointer(p, OPT_PROGRESSDATA, unsafe.Pointer(curl.handle)))
-		} else {
-			return err
+		if errCode := CurlEasySetoptPointer(p, int(OPT_XFERINFODATA), unsafe.Pointer(p)); errCode != 0 {
+			return newCurlError(errCode)
 		}
-
-	case opt == OPT_HEADERFUNCTION:
-		fun := param.(func([]byte, interface{}) bool)
-		curl.headerFunction = &fun
-
-		ptr := C.return_header_function()
-		if err := newCurlError(C.curl_easy_setopt_pointer(p, C.CURLoption(opt), ptr)); err == nil {
-			return newCurlError(C.curl_easy_setopt_pointer(p, OPT_HEADERDATA, unsafe.Pointer(curl.handle)))
-		} else {
-			return err
+		if errCode := CurlEasySetoptLong(p, int(OPT_NOPROGRESS), 0); errCode != 0 {
+			return newCurlError(errCode)
 		}
-
-	case opt == OPT_WRITEFUNCTION:
-		fun := param.(func([]byte, interface{}) bool)
-		curl.writeFunction = &fun
-
-		ptr := C.return_write_function()
-		if err := newCurlError(C.curl_easy_setopt_pointer(p, C.CURLoption(opt), ptr)); err == nil {
-			return newCurlError(C.curl_easy_setopt_pointer(p, OPT_WRITEDATA, unsafe.Pointer(curl.handle)))
-		} else {
-			return err
-		}
-
-	// for OPT_HTTPPOST, use struct Form
-	case opt == OPT_HTTPPOST:
-		post := param.(*Form)
-		ptr := post.head
-		return newCurlError(C.curl_easy_setopt_pointer(p, C.CURLoption(opt), unsafe.Pointer(ptr)))
-
-	case opt >= C.CURLOPTTYPE_OFF_T:
-		val := C.off_t(0)
-		switch t := param.(type) {
-		case int:
-			val = C.off_t(t)
-		case uint64:
-			val = C.off_t(t)
-		default:
-			panic("OFF_T conversion not supported")
-		}
-		return newCurlError(C.curl_easy_setopt_off_t(p, C.CURLoption(opt), val))
-
-	case opt >= C.CURLOPTTYPE_FUNCTIONPOINT:
-		// function pointer
-		panic("function pointer not implemented yet!")
-
-	case opt >= C.CURLOPTTYPE_OBJECTPOINT:
-		switch t := param.(type) {
-		case string:
-			ptr := C.CString(t)
-			curl.mallocAddPtr(ptr)
-			return newCurlError(C.curl_easy_setopt_string(p, C.CURLoption(opt), ptr))
-		case CurlString:
-			ptr := (*C.char)(t)
-			return newCurlError(C.curl_easy_setopt_string(p, C.CURLoption(opt), ptr))
-		case []string:
-			if len(t) > 0 {
-				ptr := C.CString(t[0])
-				curl.mallocAddPtr(ptr)
-				a_slist := C.curl_slist_append(nil, ptr)
-				for _, s := range t[1:] {
-					ptr := C.CString(s)
-					curl.mallocAddPtr(ptr)
-					a_slist = C.curl_slist_append(a_slist, ptr)
-				}
-				return newCurlError(C.curl_easy_setopt_slist(p, C.CURLoption(opt), a_slist))
-			} else {
-				return newCurlError(C.curl_easy_setopt_slist(p, C.CURLoption(opt), nil))
-			}
-		case []CurlString:
-			if len(t) > 0 {
-				ptr := (*C.char)(t[0])
-				a_slist := C.curl_slist_append(nil, ptr)
-				for _, s := range t[1:] {
-					ptr := (*C.char)(s)
-					a_slist = C.curl_slist_append(a_slist, ptr)
-				}
-				return newCurlError(C.curl_easy_setopt_slist(p, C.CURLoption(opt), a_slist))
-			} else {
-				return newCurlError(C.curl_easy_setopt_slist(p, C.CURLoption(opt), nil))
-			}
-		default:
-			// It panics if v's Kind is not Chan, Func, Map, Ptr, Slice, or UnsafePointer.
-			// val := reflect.ValueOf(param)
-			//fmt.Printf("DEBUG(Setopt): param=%x\n", val.Pointer())
-			//println("DEBUG can addr =", val.Pointer(), "opt=", opt)
-			// pass a pointer to GoInterface
-			return newCurlError(C.curl_easy_setopt_pointer(p, C.CURLoption(opt),
-				unsafe.Pointer(&param)))
-		}
-	case opt >= C.CURLOPTTYPE_LONG:
-		val := C.long(0)
-		switch t := param.(type) {
-		case int:
-			val = C.long(t)
-		case bool:
-			if t {
-				val = 1
-			}
-		case int64:
-			val = C.long(t)
-		case int32:
-			val = C.long(t)
-		default:
-			panic("not supported converstion to c long")
-		}
-		return newCurlError(C.curl_easy_setopt_long(p, C.CURLoption(opt), val))
+		return newCurlError(CurlEasySetoptFunction(p, int(opt), GetProgressCallbackFuncptr()))
 	}
-	panic("opt param error!")
+
+	if param == nil {
+		return newCurlError(CurlEasySetoptPointer(p, int(opt), nil))
+	}
+
+	switch v := param.(type) {
+	case int:
+		return newCurlError(CurlEasySetoptLong(p, int(opt), int64(v)))
+	case int32:
+		return newCurlError(CurlEasySetoptLong(p, int(opt), int64(v)))
+	case int64:
+		if isOffTOption(opt) {
+			return newCurlError(CurlEasySetoptOffT(p, int(opt), v))
+		}
+		return newCurlError(CurlEasySetoptLong(p, int(opt), v))
+	case bool:
+		var val int64 = 0
+		if v {
+			val = 1
+		}
+		return newCurlError(CurlEasySetoptLong(p, int(opt), val))
+	case string:
+		var cStr unsafe.Pointer
+		var keepAliveStr []byte
+
+		if runtime.GOOS == "windows" {
+			var ptr uintptr
+			ptr, keepAliveStr = stringToCUCharPtr(v)
+			_ = keepAliveStr
+			cStr = unsafe.Pointer(ptr)
+		} else {
+			cStr = unsafe.Pointer(C.CString(v))
+			curl.mallocAddPtr(cStr)
+		}
+		return newCurlError(CurlEasySetoptString(p, int(opt), cStr))
+
+	case []byte:
+		var dataPtr unsafe.Pointer
+		if len(v) > 0 {
+			dataPtr = unsafe.Pointer(&v[0])
+		}
+		errCode := CurlEasySetoptPointer(p, int(opt), dataPtr)
+		if errCode != 0 {
+			return newCurlError(errCode)
+		}
+		if opt == OPT_POSTFIELDS {
+			if len(v) > 2147483647 || len(v) < 0 {
+				return newCurlError(CurlEasySetoptOffT(p, int(OPT_POSTFIELDSIZE_LARGE), int64(len(v))))
+			} else {
+				return newCurlError(CurlEasySetoptLong(p, int(OPT_POSTFIELDSIZE), int64(len(v))))
+			}
+		}
+		return nil
+
+	case []string:
+		var slistHandle CurlSlist = nil
+		var cgoStringsToFreeOnFailure []unsafe.Pointer
+
+		for _, s := range v {
+			var cStr unsafe.Pointer
+			if runtime.GOOS == "windows" {
+				ptr, keepAlive := stringToCUCharPtr(s)
+				_ = keepAlive
+				cStr = unsafe.Pointer(ptr)
+			} else {
+				cStr = unsafe.Pointer(C.CString(s))
+				cgoStringsToFreeOnFailure = append(cgoStringsToFreeOnFailure, cStr)
+			}
+
+			appendedSlist := CurlSlistAppend(slistHandle, cStr)
+			if appendedSlist == nil {
+				if runtime.GOOS != "windows" {
+					for _, tempStrPtr := range cgoStringsToFreeOnFailure {
+						C.free(tempStrPtr)
+					}
+				}
+				if slistHandle != nil {
+					CurlSlistFreeAll(slistHandle)
+				}
+				return fmt.Errorf("curl: CurlSlistAppend failed for string: %s", s)
+			}
+			slistHandle = appendedSlist
+		}
+
+		errCode := CurlEasySetoptSlist(p, int(opt), slistHandle)
+		if errCode != E_OK {
+			if runtime.GOOS != "windows" {
+				for _, tempStrPtr := range cgoStringsToFreeOnFailure {
+					C.free(tempStrPtr)
+				}
+			}
+			CurlSlistFreeAll(slistHandle)
+			return newCurlError(errCode)
+		}
+
+		if runtime.GOOS != "windows" {
+			for _, tempStrPtr := range cgoStringsToFreeOnFailure {
+				curl.mallocAddPtr(tempStrPtr)
+			}
+		}
+		return nil
+
+	case *Form:
+		if v == nil || v.head == nil {
+			return newCurlError(CurlEasySetoptPointer(p, int(opt), nil))
+		}
+		return newCurlError(CurlEasySetoptPointer(p, int(opt), unsafe.Pointer(v.head)))
+
+	case unsafe.Pointer:
+		return newCurlError(CurlEasySetoptPointer(p, int(opt), v))
+
+	default:
+		return fmt.Errorf("curl: unsupported Setopt param type: %T for option %d", param, opt)
+	}
+}
+
+func isOffTOption(opt EasyOpt) bool {
+	switch opt {
+	case OPT_INFILESIZE_LARGE, OPT_RESUME_FROM_LARGE, OPT_MAXFILESIZE_LARGE, OPT_POSTFIELDSIZE_LARGE, OPT_MAX_SEND_SPEED_LARGE, OPT_MAX_RECV_SPEED_LARGE, OPT_TIMEVALUE_LARGE:
+		return true
+	}
+	return false
 }
 
 // curl_easy_send - sends raw data over an "easy" connection
 func (curl *CURL) Send(buffer []byte) (int, error) {
 	p := curl.handle
+	if p == nil {
+		return 0, fmt.Errorf("curl: easy handle is nil")
+	}
 	buflen := len(buffer)
-	n := C.size_t(0)
-	ret := C.curl_easy_send(p, unsafe.Pointer(&buffer[0]), C.size_t(buflen), &n)
-	return int(n), newCurlError(ret)
+	var n CSizeT
+	var bufPtr unsafe.Pointer
+	if buflen > 0 {
+		bufPtr = unsafe.Pointer(&buffer[0])
+	}
+
+	var nVal uintptr
+	errCode := CurlEasySend(p, bufPtr, buflen, unsafe.Pointer(&nVal))
+	n = CSizeT(nVal)
+
+	return int(n), newCurlError(errCode)
 }
+
+type CSizeT uintptr
 
 // curl_easy_recv - receives raw data on an "easy" connection
 func (curl *CURL) Recv(buffer []byte) (int, error) {
 	p := curl.handle
+	if p == nil {
+		return 0, fmt.Errorf("curl: easy handle is nil")
+	}
 	buflen := len(buffer)
-	buf := C.CString(string(buffer))
-	n := C.size_t(0)
-	ret := C.curl_easy_recv(p, unsafe.Pointer(buf), C.size_t(buflen), &n)
-	return copy(buffer, C.GoStringN(buf, C.int(n))), newCurlError(ret)
+	if buflen == 0 {
+		return 0, nil
+	}
+
+	var nVal uintptr
+	var bufPtr unsafe.Pointer
+	if buflen > 0 {
+		bufPtr = unsafe.Pointer(&buffer[0])
+	}
+
+	ret := CurlEasyRecv(p, bufPtr, buflen, unsafe.Pointer(&nVal))
+	bytesRead := int(nVal)
+
+	return bytesRead, newCurlError(ret)
 }
 
 // curl_easy_perform - Perform a file transfer
 func (curl *CURL) Perform() error {
 	p := curl.handle
-	return newCurlError(C.curl_easy_perform(p))
+	if p == nil {
+		return fmt.Errorf("curl: easy handle is nil")
+	}
+	return newCurlError(CurlEasyPerform(p))
 }
 
 // curl_easy_pause - pause and unpause a connection
 func (curl *CURL) Pause(bitmask int) error {
 	p := curl.handle
-	return newCurlError(C.curl_easy_pause(p, C.int(bitmask)))
+	if p == nil {
+		return fmt.Errorf("curl: easy handle is nil")
+	}
+	return newCurlError(CurlEasyPause(p, bitmask))
 }
 
 // curl_easy_reset - reset all options of a libcurl session handle
 func (curl *CURL) Reset() {
 	p := curl.handle
-	C.curl_easy_reset(p)
+	if p != nil {
+		CurlEasyReset(p)
+		curl.MallocFreeAfter(0)
+		curl.headerFunction = nil
+		curl.writeFunction = nil
+		curl.readFunction = nil
+		curl.progressFunction = nil
+		curl.headerData = nil
+		curl.writeData = nil
+		curl.readData = nil
+		curl.progressData = nil
+	}
 }
 
 // curl_easy_escape - URL encodes the given string
 func (curl *CURL) Escape(url string) string {
 	p := curl.handle
-	oldUrl := C.CString(url)
-	defer C.free(unsafe.Pointer(oldUrl))
-	newUrl := C.curl_easy_escape(p, oldUrl, 0)
-	defer C.curl_free(unsafe.Pointer(newUrl))
-	return C.GoString(newUrl)
+	if p == nil {
+		return ""
+	}
+	var cURL unsafe.Pointer
+	if runtime.GOOS == "windows" {
+		ptr, _ := stringToCUCharPtr(url)
+		cURL = unsafe.Pointer(ptr)
+	} else {
+		cURL = unsafe.Pointer(C.CString(url))
+		defer C.free(cURL)
+	}
+
+	escapedCURL := CurlEasyEscape(p, cURL, len(url))
+	if escapedCURL == nil {
+		return ""
+	}
+	defer CurlFree(escapedCURL)
+	return goStringSys(uintptr(escapedCURL))
 }
 
 // curl_easy_unescape - URL decodes the given string
 func (curl *CURL) Unescape(url string) string {
 	p := curl.handle
-	oldUrl := C.CString(url)
-	outlength := C.int(0)
-	defer C.free(unsafe.Pointer(oldUrl))
-	// If outlength is non-NULL, the function will write the length of the
-	// returned string in  the  integer  it  points  to.  This allows an
-	// escaped string containing %00 to still get used properly after unescaping.
-	newUrl := C.curl_easy_unescape(p, oldUrl, 0, &outlength)
-	defer C.curl_free(unsafe.Pointer(newUrl))
-	return C.GoStringN(newUrl, outlength)
+	if p == nil {
+		return ""
+	}
+	var cURL unsafe.Pointer
+	if runtime.GOOS == "windows" {
+		ptr, _ := stringToCUCharPtr(url)
+		cURL = unsafe.Pointer(ptr)
+	} else {
+		cURL = unsafe.Pointer(C.CString(url))
+		defer C.free(cURL)
+	}
+
+	var outLength int32
+	unescapedCURL := CurlEasyUnescape(p, cURL, len(url), unsafe.Pointer(&outLength))
+	if unescapedCURL == nil {
+		return ""
+	}
+	defer CurlFree(unescapedCURL)
+	return string(unsafe.Slice((*byte)(unescapedCURL), int(outLength)))
 }
 
-// curl_easy_getinfo - extract information from a curl handle
-func (curl *CURL) Getinfo(info CurlInfo) (ret interface{}, err error) {
-	p := curl.handle
-	cInfo := C.CURLINFO(info)
-	switch cInfo & C.CURLINFO_TYPEMASK {
-	case C.CURLINFO_STRING:
-		a_string := C.CString("")
-		defer C.free(unsafe.Pointer(a_string))
-		err := newCurlError(C.curl_easy_getinfo_string(p, cInfo, &a_string))
-		ret := C.GoString(a_string)
-		debugf("Getinfo %s", ret)
-		return ret, err
-	case C.CURLINFO_LONG:
-		a_long := C.long(-1)
-		err := newCurlError(C.curl_easy_getinfo_long(p, cInfo, &a_long))
-		ret := int(a_long)
-		debugf("Getinfo %s", ret)
-		return ret, err
-	case C.CURLINFO_DOUBLE:
-		a_double := C.double(0.0)
-		err := newCurlError(C.curl_easy_getinfo_double(p, cInfo, &a_double))
-		ret := float64(a_double)
-		debugf("Getinfo %s", ret)
-		return ret, err
-	case C.CURLINFO_SLIST:
-		a_ptr_slist := (*C.struct_curl_slist)(nil)
-		err := newCurlError(C.curl_easy_getinfo_slist(p, cInfo, &a_ptr_slist))
-		ret := []string{}
-		for a_ptr_slist != nil {
-			debugf("Getinfo %s %v", C.GoString(a_ptr_slist.data), a_ptr_slist.next)
-			ret = append(ret, C.GoString(a_ptr_slist.data))
-			a_ptr_slist = a_ptr_slist.next
-		}
-		return ret, err
-	default:
-		panic("error calling Getinfo\n")
+func goStringSys(ccharPtr uintptr) string {
+	if ccharPtr == 0 {
+		return ""
 	}
-	panic("not implemented yet!")
-	return nil, nil
+	ptr := unsafe.Pointer(ccharPtr)
+	var length int
+	for {
+		if *(*byte)(unsafe.Pointer(uintptr(ptr) + uintptr(length))) == 0 {
+			break
+		}
+		length++
+		if length > (1 << 20) {
+			return ""
+		}
+	}
+	if length == 0 {
+		return ""
+	}
+	return string(unsafe.Slice((*byte)(ptr), length))
+}
+
+func (curl *CURL) Getinfo(infoConstant uint32) (any, error) {
+	p := curl.handle
+	if p == nil {
+		return nil, fmt.Errorf("curl: easy handle is nil")
+	}
+
+	typeMask := GetCurlInfoTypeMask()
+	infoType := infoConstant & typeMask
+
+	switch infoType {
+	case GetCurlInfoString():
+		var cStrPtr uintptr
+		errCode := CurlEasyGetinfoString(p, infoConstant, unsafe.Pointer(&cStrPtr))
+		if errCode != E_OK {
+			return nil, newCurlError(errCode)
+		}
+		if cStrPtr == 0 {
+			return "", nil
+		}
+		return goStringSys(cStrPtr), nil
+	case GetCurlInfoLong():
+		var val int32
+		errCode := CurlEasyGetinfoLong(p, infoConstant, unsafe.Pointer(&val))
+		if errCode != E_OK {
+			return nil, newCurlError(errCode)
+		}
+		return int64(val), nil
+	case GetCurlInfoDouble():
+		var val float64
+		errCode := CurlEasyGetinfoDouble(p, infoConstant, unsafe.Pointer(&val))
+		if errCode != E_OK {
+			return nil, newCurlError(errCode)
+		}
+		return val, nil
+	case GetCurlInfoSList():
+		var slistPtr CurlSlist
+		errCode := CurlEasyGetinfoSlist(p, infoConstant, unsafe.Pointer(&slistPtr))
+		if errCode != E_OK {
+			return nil, newCurlError(errCode)
+		}
+		if slistPtr == nil {
+			return []string{}, nil
+		}
+		var goSlice []string
+		current := slistPtr
+		for current != nil {
+			dataPtr := *(*uintptr)(unsafe.Pointer(current))
+			if dataPtr != 0 {
+				goSlice = append(goSlice, goStringSys(dataPtr))
+			}
+			current = CurlSlist(*(*uintptr)(unsafe.Pointer(uintptr(current) + unsafe.Sizeof(uintptr(0)))))
+		}
+		return goSlice, nil
+	default:
+		return nil, fmt.Errorf("curl: Getinfo unsupported info type for constant: %d (type: %d)", infoConstant, infoType)
+	}
+}
+
+func PrintCurlVersionInfo(infoPtr unsafe.Pointer) {
+	if infoPtr == nil {
+		fmt.Println("CurlVersionInfoData is nil")
+		return
+	}
+	data := (*CurlVersionInfoDataLayout)(infoPtr)
+
+	fmt.Printf("Age: %d\n", data.Age)
+	fmt.Printf("Version: %s\n", goStringSys(data.Version))
+	fmt.Printf("VersionNum: 0x%x\n", data.VersionNum)
+	fmt.Printf("Host: %s\n", goStringSys(data.Host))
+	fmt.Printf("Features: 0x%x\n", data.Features)
+	fmt.Printf("SSL Version: %s\n", goStringSys(data.SslVersion))
+	fmt.Printf("SSL Version Num: %d\n", data.SslVersionNum)
+	fmt.Printf("Libz Version: %s\n", goStringSys(data.LibzVersion))
+
+	if data.Protocols != 0 {
+		fmt.Println("Protocols:")
+		for i := 0; ; i++ {
+			protocolPtr := *(*uintptr)(unsafe.Pointer(data.Protocols + uintptr(i)*unsafe.Sizeof(uintptr(0))))
+			if protocolPtr == 0 {
+				break
+			}
+			fmt.Printf("  - %s\n", goStringSys(protocolPtr))
+		}
+	}
+	fmt.Printf("Ares: %s\n", goStringSys(data.Ares))
+	fmt.Printf("Ares_num: %d\n", data.AresNum)
+	fmt.Printf("Libidn: %s\n", goStringSys(data.Libidn))
+}
+
+func (curl *CURL) Impersonate(target string, defaultHeaders bool) error {
+	p := curl.handle
+	if p == nil {
+		return fmt.Errorf("curl: easy handle is nil")
+	}
+
+	var cTarget unsafe.Pointer
+	var keepAliveTarget []byte
+
+	if runtime.GOOS == "windows" {
+		ptr, ka := stringToCUCharPtr(target)
+		cTarget = unsafe.Pointer(ptr)
+		keepAliveTarget = ka
+		_ = keepAliveTarget
+	} else {
+		cTarget = unsafe.Pointer(C.CString(target))
+		defer C.free(cTarget)
+	}
+
+	var cDefaultHeaders int = 0
+	if defaultHeaders {
+		cDefaultHeaders = 1
+	}
+	return newCurlError(CurlEasyImpersonate(p, cTarget, cDefaultHeaders))
 }
 
 func (curl *CURL) GetHandle() unsafe.Pointer {
@@ -430,98 +601,175 @@ func (curl *CURL) MallocGetPos() int {
 }
 
 func (curl *CURL) MallocFreeAfter(from int) {
-	l := len(curl.mallocAllocs)
-	for idx := from; idx < l; idx++ {
-		C.free(unsafe.Pointer(curl.mallocAllocs[idx]))
-		curl.mallocAllocs[idx] = nil
+	if from < 0 || from > len(curl.mallocAllocs) {
+		return
 	}
-	curl.mallocAllocs = curl.mallocAllocs[0:from]
+	for i := from; i < len(curl.mallocAllocs); i++ {
+		if curl.mallocAllocs[i] != nil {
+			if runtime.GOOS != "windows" {
+				C.free(curl.mallocAllocs[i])
+			}
+			curl.mallocAllocs[i] = nil
+		}
+	}
+	curl.mallocAllocs = curl.mallocAllocs[:from]
 }
 
-func (curl *CURL) mallocAddPtr(ptr *C.char) {
+func (curl *CURL) mallocAddPtr(ptr unsafe.Pointer) {
 	curl.mallocAllocs = append(curl.mallocAllocs, ptr)
 }
 
 // A multipart/formdata HTTP POST form
 type Form struct {
-	head, last *C.struct_curl_httppost
+	head       CurlHttpFormPost
+	last       CurlHttpFormPost
+	formAllocs []unsafe.Pointer
 }
 
 func NewForm() *Form {
-	return &Form{}
+	return &Form{formAllocs: make([]unsafe.Pointer, 0)}
 }
 
-func (form *Form) Add(name string, content interface{}) error {
-	head, last := form.head, form.last
-	namestr := C.CString(name)
-	defer C.free(unsafe.Pointer(namestr))
-	var (
-		buffer *C.char
-		length C.int
-	)
+func (form *Form) addFormAlloc(p unsafe.Pointer) {
+	form.formAllocs = append(form.formAllocs, p)
+}
+
+func (form *Form) Add(name string, content any) error {
+	var cName, cContent unsafe.Pointer
+	var length int
+
+	if runtime.GOOS == "windows" {
+		ptr, _ := stringToCUCharPtr(name)
+		cName = unsafe.Pointer(ptr)
+	} else {
+		cName = unsafe.Pointer(C.CString(name))
+		form.addFormAlloc(cName)
+	}
+
 	switch t := content.(type) {
 	case string:
-		buffer = C.CString(t)
-		length = C.int(len(t))
+		length = len(t)
+		if runtime.GOOS == "windows" {
+			ptr, _ := stringToCUCharPtr(t)
+			cContent = unsafe.Pointer(ptr)
+		} else {
+			cContent = unsafe.Pointer(C.CString(t))
+			form.addFormAlloc(cContent)
+		}
 	case []byte:
-		buffer = C.CString(string(t))
-		length = C.int(len(t))
+		length = len(t)
+		if len(t) > 0 {
+			cContent = unsafe.Pointer(&t[0])
+		}
 	default:
-		panic("not implemented")
+		return fmt.Errorf("curl: form add unsupported content type %T", content)
 	}
-	defer C.free(unsafe.Pointer(buffer))
-	C.curl_formadd_name_content_length(&head, &last, namestr, buffer, length)
-	form.head, form.last = head, last
+
+	retCode := CurlFormaddNameContentLength(unsafe.Pointer(&form.head), unsafe.Pointer(&form.last), cName, cContent, length)
+	if retCode != GetCurlFormaddOk() {
+		return fmt.Errorf("curl: formadd failed with code %d", retCode)
+	}
 	return nil
 }
 
-func (form *Form) AddWithType(name string, content interface{}, content_type string) error {
-	head, last := form.head, form.last
-	namestr := C.CString(name)
-	typestr := C.CString(content_type)
-	defer C.free(unsafe.Pointer(namestr))
-	defer C.free(unsafe.Pointer(typestr))
-	var (
-		buffer *C.char
-		length C.int
-	)
+func (form *Form) AddWithType(name string, content any, contentType string) error {
+	var cName, cContent, cContentType unsafe.Pointer
+	var length int
+
+	if runtime.GOOS == "windows" {
+		ptrName, _ := stringToCUCharPtr(name)
+		cName = unsafe.Pointer(ptrName)
+		ptrCType, _ := stringToCUCharPtr(contentType)
+		cContentType = unsafe.Pointer(ptrCType)
+	} else {
+		cName = unsafe.Pointer(C.CString(name))
+		form.addFormAlloc(cName)
+		cContentType = unsafe.Pointer(C.CString(contentType))
+		form.addFormAlloc(cContentType)
+	}
+
 	switch t := content.(type) {
 	case string:
-		buffer = C.CString(t)
-		length = C.int(len(t))
+		length = len(t)
+		if runtime.GOOS == "windows" {
+			ptrContent, _ := stringToCUCharPtr(t)
+			cContent = unsafe.Pointer(ptrContent)
+		} else {
+			cContent = unsafe.Pointer(C.CString(t))
+			form.addFormAlloc(cContent)
+		}
 	case []byte:
-		buffer = C.CString(string(t))
-		length = C.int(len(t))
+		length = len(t)
+		if len(t) > 0 {
+			cContent = unsafe.Pointer(&t[0])
+		}
 	default:
-		panic("not implemented")
+		return fmt.Errorf("curl: form addwithtype unsupported content type %T", content)
 	}
-	defer C.free(unsafe.Pointer(buffer))
-	C.curl_formadd_name_content_length_type(&head, &last, namestr, buffer, length, typestr)
-	form.head, form.last = head, last
+
+	retCode := CurlFormaddNameContentLengthType(unsafe.Pointer(&form.head), unsafe.Pointer(&form.last), cName, cContent, length, cContentType)
+	if retCode != GetCurlFormaddOk() {
+		return fmt.Errorf("curl: formaddwithtype failed with code %d", retCode)
+	}
 	return nil
 }
 
 func (form *Form) AddFile(name, filename string) error {
-	head, last := form.head, form.last
-	namestr := C.CString(name)
-	pathstr := C.CString(filename)
-	typestr := C.CString(guessType(filename))
-	defer C.free(unsafe.Pointer(namestr))
-	defer C.free(unsafe.Pointer(pathstr))
-	defer C.free(unsafe.Pointer(typestr))
-	C.curl_formadd_name_file_type(&head, &last, namestr, pathstr, typestr)
-	form.head, form.last = head, last
+	var cName, cFilename, cContentType unsafe.Pointer
+
+	guessedType := guessType(filename)
+
+	if runtime.GOOS == "windows" {
+		ptrName, _ := stringToCUCharPtr(name)
+		cName = unsafe.Pointer(ptrName)
+		ptrFName, _ := stringToCUCharPtr(filename)
+		cFilename = unsafe.Pointer(ptrFName)
+		if guessedType != "" {
+			ptrCType, _ := stringToCUCharPtr(guessedType)
+			cContentType = unsafe.Pointer(ptrCType)
+		}
+	} else {
+		cName = unsafe.Pointer(C.CString(name))
+		form.addFormAlloc(cName)
+		cFilename = unsafe.Pointer(C.CString(filename))
+		form.addFormAlloc(cFilename)
+		if guessedType != "" {
+			cContentType = unsafe.Pointer(C.CString(guessedType))
+			form.addFormAlloc(cContentType)
+		}
+	}
+
+	retCode := CurlFormaddNameFileType(unsafe.Pointer(&form.head), unsafe.Pointer(&form.last), cName, cFilename, cContentType)
+	if retCode != GetCurlFormaddOk() {
+		return fmt.Errorf("curl: formaddfile failed with code %d", retCode)
+	}
 	return nil
 }
 
-func (form *Form) AddFromFile(name, filename string) {
+func (form *Form) Free() {
+	if form.head != nil {
+		CurlFormFree(form.head)
+		form.head = nil
+		form.last = nil
+	}
+	if runtime.GOOS != "windows" {
+		for _, ptr := range form.formAllocs {
+			if ptr != nil {
+				C.free(ptr)
+			}
+		}
+	}
+	form.formAllocs = nil
 }
 
 func guessType(filename string) string {
 	ext := path.Ext(filename)
-	file_type := mime.TypeByExtension(ext)
-	if file_type == "" {
+	if ext == "" {
 		return "application/octet-stream"
 	}
-	return file_type
+	mimeType := mime.TypeByExtension(ext)
+	if mimeType == "" {
+		return "application/octet-stream"
+	}
+	return mimeType
 }

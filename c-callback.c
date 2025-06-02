@@ -24,7 +24,7 @@ void *return_write_function() {
 
 /* for OPT_READFUNCTION */
 size_t read_function( char *ptr, size_t size, size_t nmemb, void *ctx) {
-	return goCallReadFunction(ptr, size*nmemb, ctx);
+	return goCallReadFunction(ptr, size, nmemb, ctx);
 }
 
 void *return_read_function() {

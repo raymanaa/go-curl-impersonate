@@ -1,7 +1,7 @@
 package main
 
 import (
-	curl "github.com/andelf/go-curl"
+	curl "github.com/BridgeSenseDev/go-curl-impersonate"
 	"os"
 )
 
@@ -10,9 +10,9 @@ const (
 	bodyfilename   = "body.out"
 )
 
-func write_data(ptr []byte, userdata interface{}) bool {
+func write_data(ptr []byte, userdata any) bool {
 	//println("DEBUG(write_data): ", userdata)
-	//println("DEBUG", userdata.(interface{}))
+	//println("DEBUG", userdata.(any))
 	fp := userdata.(*os.File)
 	if _, err := fp.Write(ptr); err == nil {
 		return true

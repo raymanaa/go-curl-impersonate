@@ -1,160 +1,191 @@
-// This file depends on functionality not available on Windows, hence we
-// must skip it. https://github.com/andelf/go-curl/issues/48
-
-// +build !windows
+// multi.go
 
 package curl
 
-/*
-#include <stdlib.h>
-#include <curl/curl.h>
-
-static CURLMcode curl_multi_setopt_long(CURLM *handle, CURLMoption option, long parameter) {
-  return curl_multi_setopt(handle, option, parameter);
-}
-static CURLMcode curl_multi_setopt_pointer(CURLM *handle, CURLMoption option, void *parameter) {
-  return curl_multi_setopt(handle, option, parameter);
-}
-static CURLMcode curl_multi_fdset_pointer(CURLM *handle,
-                            void *read_fd_set,
-                            void *write_fd_set,
-                            void *exc_fd_set,
-                            int *max_fd)
-{
-  return curl_multi_fdset(handle, read_fd_set, write_fd_set, exc_fd_set, max_fd);
-}                            
-static CURLMsg *curl_multi_info_read_pointer(CURLM *handle, int *msgs_in_queue)
-{
-  return curl_multi_info_read(handle, msgs_in_queue);
-}                            
-*/
-import "C"
-
+import "C" // Keep if using C.int, C.long for variables passed to wrappers.
 import (
-		"unsafe"
-		"syscall"
+	"fmt"
+	// "syscall" // No longer needed for FdSet
+	"unsafe"
 )
 
-type CurlMultiError C.CURLMcode
-type CurlMultiMsg	C.CURLMSG
-
-func (e CurlMultiError) Error() string {
-	// ret is const char*, no need to free
-	ret := C.curl_multi_strerror(C.CURLMcode(e))
-	return C.GoString(ret)
+// CurlMultiError Error method and newCurlMultiError remain the same
+func (e MultiCode) Error() string {
+	return CurlMultiStrerror(e)
 }
-
-func newCurlMultiError(errno C.CURLMcode) error {
-	// cannot use C.CURLM_OK here, cause multi.h use a undefined emum num
-	if errno == 0 { // if nothing wrong
+func newCurlMultiError(errno MultiCode) error {
+	if errno == GetCurlmOk() {
 		return nil
 	}
-	return CurlMultiError(errno)
+	return errno
 }
 
-func newCURLMessage(message *C.CURLMsg) (msg *CURLMessage){
-	if message == nil {
+// Add String method for CurlMultiMsgTag for better logging
+func (t CurlMultiMsgTag) String() string {
+	if t == GetCurlmsgDone() { // Assumes GetCurlmsgDone() returns the correct underlying value
+		return "CURLMSG_DONE"
+	}
+	// You can add more cases here if libcurl exposes other CURLMSG types you use
+	// e.g. CURLMSG_NONE if that's a possible value from CurlMsgGetMsg
+	return fmt.Sprintf("CURLMSG type %d", t)
+}
+
+type CURLMessage struct {
+	Msg         CurlMultiMsgTag
+	Easy_handle *CURL
+	DoneResult  Code
+	PointerVal  unsafe.Pointer
+}
+
+// newCURLMessage remains the same
+func newCURLMessage(opaqueCM CurlMsg) *CURLMessage {
+	if opaqueCM == nil {
 		return nil
 	}
-	msg = new(CURLMessage)
-	msg.Msg = CurlMultiMsg(message.msg)
-	msg.Easy_handle = &CURL{handle: message.easy_handle}
-	msg.Data = message.data
-	return msg 
+
+	goMsg := new(CURLMessage)
+	goMsg.Msg = CurlMsgGetMsg(opaqueCM) // Use accessor
+
+	easyHandlePtr := CurlMsgGetEasyHandle(opaqueCM) // Use accessor (returns unsafe.Pointer)
+	if easyHandlePtr != nil {
+		// Assuming context_map is properly defined and accessible for mapping C handles to Go *CURL structs
+		// goEasyHandle := context_map.Get(uintptr(easyHandlePtr))
+		// if goEasyHandle != nil {
+		// 	goMsg.Easy_handle = goEasyHandle
+		// } else {
+		// For simplicity if context_map isn't shown or fully implemented for multi:
+		goMsg.Easy_handle = &CURL{handle: easyHandlePtr}
+		// }
+	}
+
+	if goMsg.Msg == GetCurlmsgDone() {
+		goMsg.DoneResult = CurlMsgGetResult(opaqueCM) // Use accessor
+	} else {
+		goMsg.PointerVal = CurlMsgGetWhatever(opaqueCM) // Use accessor
+	}
+	return goMsg
 }
 
 type CURLM struct {
 	handle unsafe.Pointer
 }
 
-var dummy unsafe.Pointer
-type CURLMessage struct {
-	Msg CurlMultiMsg
-	Easy_handle *CURL
-	Data [unsafe.Sizeof(dummy)]byte
-}
+// MultiInit, Cleanup, Perform, AddHandle, RemoveHandle, Timeout, Setopt
+// remain as in the previous *correct* version where they call wrappers
+// from others.go and use newCurlMultiError.
 
-// curl_multi_init - create a multi handle
 func MultiInit() *CURLM {
-	p := C.curl_multi_init()
-	return &CURLM{p}
+	p := CurlMultiInit()
+	if p == nil {
+		return nil
+	}
+	return &CURLM{handle: unsafe.Pointer(p)}
 }
 
-// curl_multi_cleanup - close down a multi session
 func (mcurl *CURLM) Cleanup() error {
-	p := mcurl.handle
-	return newCurlMultiError(C.curl_multi_cleanup(p))
+	if mcurl.handle == nil {
+		return nil
+	}
+	err := newCurlMultiError(CurlMultiCleanup(MultiHandle(mcurl.handle)))
+	mcurl.handle = nil
+	return err
 }
 
-// curl_multi_perform - reads/writes available data from each easy handle
 func (mcurl *CURLM) Perform() (int, error) {
-	p := mcurl.handle
-	running_handles := C.int(-1)
-	err := newCurlMultiError(C.curl_multi_perform(p, &running_handles))
-	return int(running_handles), err
+	if mcurl.handle == nil {
+		return 0, fmt.Errorf("curl: multi handle is nil")
+	}
+	var runningHandles C.int = -1 // C.int might be int32
+	err := newCurlMultiError(CurlMultiPerform(MultiHandle(mcurl.handle), unsafe.Pointer(&runningHandles)))
+	return int(runningHandles), err
 }
 
-// curl_multi_add_handle - add an easy handle to a multi session
 func (mcurl *CURLM) AddHandle(easy *CURL) error {
-	mp := mcurl.handle
-	easy_handle := easy.handle
-	return newCurlMultiError(C.curl_multi_add_handle(mp, easy_handle))
+	if mcurl.handle == nil {
+		return fmt.Errorf("curl: multi handle is nil")
+	}
+	if easy == nil || easy.handle == nil {
+		return fmt.Errorf("curl: easy handle is nil")
+	}
+	return newCurlMultiError(CurlMultiAddHandle(MultiHandle(mcurl.handle), easy.handle))
 }
 
-// curl_multi_remove_handle - remove an easy handle from a multi session
 func (mcurl *CURLM) RemoveHandle(easy *CURL) error {
-	mp := mcurl.handle
-	easy_handle := easy.handle
-	return newCurlMultiError(C.curl_multi_remove_handle(mp, easy_handle))
+	if mcurl.handle == nil {
+		return fmt.Errorf("curl: multi handle is nil")
+	}
+	if easy == nil || easy.handle == nil {
+		return fmt.Errorf("curl: easy handle is nil to remove")
+	}
+	return newCurlMultiError(CurlMultiRemoveHandle(MultiHandle(mcurl.handle), easy.handle))
 }
 
 func (mcurl *CURLM) Timeout() (int, error) {
-	p := mcurl.handle
-	timeout := C.long(-1)
-	err := newCurlMultiError(C.curl_multi_timeout(p, &timeout))
-	return int(timeout), err
+	if mcurl.handle == nil {
+		return -1, fmt.Errorf("curl: multi handle is nil")
+	}
+	var timeoutMs C.long = -1 // C.long can be int32 or int64 depending on platform
+	err := newCurlMultiError(CurlMultiTimeout(MultiHandle(mcurl.handle), unsafe.Pointer(&timeoutMs)))
+	return int(timeoutMs), err
 }
 
-func (mcurl *CURLM) Setopt(opt int, param interface{}) error {
-	p := mcurl.handle
+func (mcurl *CURLM) Setopt(opt int, param any) error {
+	if mcurl.handle == nil {
+		return fmt.Errorf("curl: multi handle is nil")
+	}
+	option := uint32(opt)
 	if param == nil {
-		return newCurlMultiError(C.curl_multi_setopt_pointer(p, C.CURLMoption(opt), nil))
+		return newCurlMultiError(CurlMultiSetoptPointer(MultiHandle(mcurl.handle), MultiOption(option), nil))
 	}
-	switch {
-	//  currently cannot support these option
-	//	case MOPT_SOCKETFUNCTION, MOPT_SOCKETDATA, MOPT_TIMERFUNCTION, MOPT_TIMERDATA:
-	//		panic("not supported CURLM.Setopt opt")
-	case opt >= C.CURLOPTTYPE_LONG:
-		val := C.long(0)
-		switch t := param.(type) {
-		case int:
-			val := C.long(t)
-			return newCurlMultiError(C.curl_multi_setopt_long(p, C.CURLMoption(opt), val))
-		case bool:
-			val = C.long(0)
-			if t {
-				val = C.long(1)
-			}
-			return newCurlMultiError(C.curl_multi_setopt_long(p, C.CURLMoption(opt), val))
+	switch v := param.(type) {
+	case int:
+		return newCurlMultiError(CurlMultiSetoptLong(MultiHandle(mcurl.handle), MultiOption(option), int64(v)))
+	case int32:
+		return newCurlMultiError(CurlMultiSetoptLong(MultiHandle(mcurl.handle), MultiOption(option), int64(v)))
+	case int64:
+		return newCurlMultiError(CurlMultiSetoptLong(MultiHandle(mcurl.handle), MultiOption(option), v))
+	case bool:
+		var val int64 = 0
+		if v {
+			val = 1
 		}
+		return newCurlMultiError(CurlMultiSetoptLong(MultiHandle(mcurl.handle), MultiOption(option), val))
+	default:
+		if p, ok := param.(unsafe.Pointer); ok {
+			return newCurlMultiError(CurlMultiSetoptPointer(MultiHandle(mcurl.handle), MultiOption(option), p))
+		}
+		return fmt.Errorf("curl: unsupported Setopt param type %T for multi option %d", param, opt)
 	}
-	panic("not supported CURLM.Setopt opt or param")
-	return nil
 }
 
-func (mcurl *CURLM) Fdset(rset, wset, eset *syscall.FdSet) (int, error) {
-	p := mcurl.handle
-	read := unsafe.Pointer(rset)
-	write := unsafe.Pointer(wset)
-	exc := unsafe.Pointer(eset)
-	maxfd := C.int(-1)
-	err := newCurlMultiError(C.curl_multi_fdset_pointer(p, read, write,
-							 exc, &maxfd))
-	return int(maxfd), err
+// REMOVE Fdset method
+// func (mcurl *CURLM) Fdset(rset, wset, eset *syscall.FdSet) (int, error) {
+// 	if mcurl.handle == nil {
+// 		return -1, fmt.Errorf("curl: multi handle is nil")
+// 	}
+// 	var maxFd C.int = -1
+// 	err := newCurlMultiError(CurlMultiFdset(MultiHandle(mcurl.handle),
+// 		FdSetPlaceholder(rset), FdSetPlaceholder(wset), FdSetPlaceholder(eset), &maxFd))
+// 	return int(maxFd), err
+// }
+
+// Wait calls curl_multi_wait.
+// For simplicity, extraFds (should be *C.struct_curl_waitfd) and extraNumFds are currently not used from Go, pass nil and 0.
+// numFdsReady must be a pointer to C.int, and will be populated with the number of file descriptors with activity.
+func (mcurl *CURLM) Wait(extraFds unsafe.Pointer, extraNumFds int, timeoutMs int, numFdsReady *C.int) error {
+	if mcurl.handle == nil {
+		return fmt.Errorf("curl: multi handle is nil")
+	}
+	// Pass numFdsReady directly as it's already a pointer to C.int
+	return newCurlMultiError(CurlMultiWait(MultiHandle(mcurl.handle), extraFds, extraNumFds, timeoutMs, unsafe.Pointer(numFdsReady)))
 }
 
+// Info_read uses the wrapper that returns CurlMsg (unsafe.Pointer)
 func (mcurl *CURLM) Info_read() (*CURLMessage, int) {
-	p := mcurl.handle
-	left := C.int(0)
-  	return newCURLMessage(C.curl_multi_info_read_pointer(p, &left)), int(left)
+	if mcurl.handle == nil {
+		return nil, 0
+	}
+	var msgsInQueue C.int = 0
+	opaqueCM := CurlMultiInfoRead(MultiHandle(mcurl.handle), unsafe.Pointer(&msgsInQueue))
+	return newCURLMessage(opaqueCM), int(msgsInQueue)
 }

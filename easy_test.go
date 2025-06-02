@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"testing"
 	"sync"
+	"testing"
 )
 
 func setupTestServer(serverContent string) *httptest.Server {
@@ -21,7 +21,7 @@ func TestEasyInterface(t *testing.T) {
 	easy := EasyInit()
 	defer easy.Cleanup()
 
-	easy.Setopt(OPT_URL, ts.URL)
+	easy.Setopt(EasyOpt(OPT_URL), ts.URL)
 	if err := easy.Perform(); err != nil {
 		t.Fatal(err)
 	}
@@ -35,8 +35,8 @@ func TestCallbackFunction(t *testing.T) {
 	easy := EasyInit()
 	defer easy.Cleanup()
 
-	easy.Setopt(OPT_URL, ts.URL)
-	easy.Setopt(OPT_WRITEFUNCTION, func(buf []byte, userdata interface{}) bool {
+	easy.Setopt(EasyOpt(OPT_URL), ts.URL)
+	easy.Setopt(EasyOpt(OPT_WRITEFUNCTION), func(buf []byte, userdata any) bool {
 		result := string(buf)
 		expected := serverContent + "\n"
 		if result != expected {
@@ -65,7 +65,7 @@ func TestConcurrentInitAndCleanup(t *testing.T) {
 	c := 2
 	var wg sync.WaitGroup
 	wg.Add(c)
-	for i := 0; i < c; i++ {
+	for range c {
 		go func() {
 			wg.Done()
 			easy := EasyInit()

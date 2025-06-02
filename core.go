@@ -2,11 +2,13 @@
 package curl
 
 /*
-#cgo linux pkg-config: libcurl
-#cgo darwin LDFLAGS: -lcurl
-#cgo windows LDFLAGS: -lcurl
+#cgo darwin,arm64 CFLAGS: -I${SRCDIR}/libs/include -DCURL_STATICLIB
+#cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/libs/darwin_arm64 -lcurl-impersonate
+
+#cgo linux,amd64 CFLAGS: -I${SRCDIR}/libs/include -DCURL_STATICLIB
+#cgo linux,amd64 LDFLAGS: -L${SRCDIR}/libs/linux_amd64_gnu -Wl,-Bstatic -lcurl-impersonate -Wl,-Bdynamic -lssl -lcrypto -lngtcp2_crypto_boringssl -lngtcp2 -lnghttp3 -lnghttp2 -lzstd -lbrotlienc -lbrotlidec -lbrotlicommon -lz -lstdc++ -ldl -lpthread
+
 #include <stdlib.h>
-#include <curl/curl.h>
 
 static char *string_array_index(char **p, int i) {
   return p[i];
@@ -20,17 +22,17 @@ import (
 )
 
 // curl_global_init - Global libcurl initialisation
-func GlobalInit(flags int) error {
-	return newCurlError(C.curl_global_init(C.long(flags)))
+func GlobalInit(flags int64) error {
+	return newCurlError(CurlGlobalInit(flags))
 }
 
 // curl_global_cleanup - global libcurl cleanup
 func GlobalCleanup() {
-	C.curl_global_cleanup()
+	CurlGlobalCleanup()
 }
 
 type VersionInfoData struct {
-	Age C.CURLversion
+	Age CurlVersion
 	// age >= 0
 	Version       string
 	VersionNum    uint
@@ -48,44 +50,46 @@ type VersionInfoData struct {
 	// age >= 3
 	IconvVerNum   int
 	LibsshVersion string
+	BrotliVerNum  uint32
+	BrotliVersion string
 }
 
 // curl_version - returns the libcurl version string
 func Version() string {
-	return C.GoString(C.curl_version())
+	return GetCurlVersion()
 }
 
 // curl_version_info - returns run-time libcurl version info
-func VersionInfo(ver C.CURLversion) *VersionInfoData {
-	data := C.curl_version_info(ver)
+func VersionInfo(ver CurlVersion) *VersionInfoData {
+	dataPtr := GetCurlVersionInfo(uint32(ver))
+	if dataPtr == nil {
+		return nil
+	}
+
 	ret := new(VersionInfoData)
-	ret.Age = data.age
+	ret.Age = CurlVersion(viGetAge(dataPtr))
 	switch age := ret.Age; {
 	case age >= 0:
-		ret.Version = string(C.GoString(data.version))
-		ret.VersionNum = uint(data.version_num)
-		ret.Host = C.GoString(data.host)
-		ret.Features = int(data.features)
-		ret.SslVersion = C.GoString(data.ssl_version)
-		ret.SslVersionNum = int(data.ssl_version_num)
-		ret.LibzVersion = C.GoString(data.libz_version)
+		ret.Version = viGetVersion(dataPtr)
+		ret.VersionNum = uint(viGetVersionNum(dataPtr))
+		ret.Host = viGetHost(dataPtr)
+		ret.Features = int(viGetFeatures(dataPtr))
+		ret.SslVersion = viGetSslVersion(dataPtr)
+		ret.SslVersionNum = int(viGetSslVersionNum(dataPtr))
+		ret.LibzVersion = viGetLibzVersion(dataPtr)
 		// ugly but works
-		ret.Protocols = []string{}
-		for i := C.int(0); C.string_array_index(data.protocols, i) != nil; i++ {
-			p := C.string_array_index(data.protocols, i)
-			ret.Protocols = append(ret.Protocols, C.GoString(p))
-		}
+		ret.Protocols = viGetProtocols(dataPtr)
 		fallthrough
 	case age >= 1:
-		ret.Ares = C.GoString(data.ares)
-		ret.AresNum = int(data.ares_num)
+		ret.Ares = viGetAres(dataPtr)
+		ret.AresNum = int(viGetAresNum(dataPtr))
 		fallthrough
 	case age >= 2:
-		ret.Libidn = C.GoString(data.libidn)
+		ret.Libidn = viGetLibidn(dataPtr)
 		fallthrough
 	case age >= 3:
-		ret.IconvVerNum = int(data.iconv_ver_num)
-		ret.LibsshVersion = C.GoString(data.libssh_version)
+		ret.IconvVerNum = int(viGetIconvVerNum(dataPtr))
+		ret.LibsshVersion = viGetLibsshVersion(dataPtr)
 	}
 	return ret
 }
@@ -95,7 +99,7 @@ func VersionInfo(ver C.CURLversion) *VersionInfoData {
 func Getdate(date string) *time.Time {
 	datestr := C.CString(date)
 	defer C.free(unsafe.Pointer(datestr))
-	t := C.curl_getdate(datestr, nil)
+	t := CurlGetDate(unsafe.Pointer(datestr), nil)
 	if t == -1 {
 		return nil
 	}

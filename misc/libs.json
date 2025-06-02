@@ -1,0 +1,30 @@
+[
+  {
+    "match_criteria": {
+      "system": "Linux",
+      "machine": "x86_64",
+      "libc": "gnu"
+    },
+    "dest_leaf_dir": "linux_amd64_gnu",
+    "archive_slug": "x86_64-linux-gnu",
+    "extraction_method": "static_linux_bundle"
+  },
+  {
+    "match_criteria": {
+      "system": "Windows",
+      "machine": "AMD64"
+    },
+    "dest_leaf_dir": "windows_amd64",
+    "archive_slug": "x86_64-win32",
+    "extraction_method": "windows_dll_lib"
+  },
+  {
+    "match_criteria": {
+      "system": "Darwin",
+      "machine": "arm64"
+    },
+    "dest_leaf_dir": "darwin_arm64",
+    "archive_slug": "arm64-macos",
+    "extraction_method": "macos_dylib"
+  }
+]

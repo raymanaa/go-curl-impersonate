@@ -4,11 +4,11 @@ package main
 
 import (
 	"fmt"
-	curl "github.com/andelf/go-curl"
+	curl "github.com/BridgeSenseDev/go-curl-impersonate"
 	"time"
 )
 
-func write_data(ptr []byte, userdata interface{}) bool {
+func write_data(ptr []byte, userdata any) bool {
 	// make it ok, do nothing
 	return true
 }
@@ -27,7 +27,7 @@ func main() {
 	easy.Setopt(curl.OPT_NOPROGRESS, false)
 
 	started := int64(0)
-	easy.Setopt(curl.OPT_PROGRESSFUNCTION, func(dltotal, dlnow, ultotal, ulnow float64, userdata interface{}) bool {
+	easy.Setopt(curl.OPT_PROGRESSFUNCTION, func(dltotal, dlnow, ultotal, ulnow float64, userdata any) bool {
 		// canceled when 50% finished
 		if dlnow/dltotal > 0.5 {
 			println("")

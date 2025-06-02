@@ -5,7 +5,7 @@ import (
 	"os"
 	"reflect"
 
-	curl "github.com/andelf/go-curl"
+	curl "github.com/BridgeSenseDev/go-curl-impersonate"
 )
 
 const endl = "\n"
@@ -38,14 +38,14 @@ func main() {
 	}
 	//print("set url =>", ret.Setopt(curl.OPT_URL, "http://commondatastorage.googleapis.com/chromium-browser-continuous/Linux_x64/104547/chrome-linux.zip"), endl)
 
-	print("set user_agent =>", ret.Setopt(curl.OPT_USERAGENT, "github.com/andelf/go-curl v0.0.1") == nil, endl)
+	print("set user_agent =>", ret.Setopt(curl.OPT_USERAGENT, "github.com/BridgeSenseDev/go-curl-impersonate v0.0.1") == nil, endl)
 	// add to DNS cache
 	print("set resolve =>", ret.Setopt(curl.OPT_RESOLVE, []string{"www.baidu.com:8000:127.0.0.1"}) == nil, endl)
 	// ret.EasyReset()  clean seted
 
 	// currently not finished!
 	//
-	fooTest := func(buf []byte, userdata interface{}) bool {
+	fooTest := func(buf []byte, userdata any) bool {
 		// buf := ptr.([]byte)
 		println("size=>", len(buf))
 		println("DEBUG(in callback)", buf, userdata)

@@ -1,11 +1,11 @@
 package main
 
 import (
-	curl "github.com/andelf/go-curl"
+	curl "github.com/BridgeSenseDev/go-curl-impersonate"
 	"time"
 )
 
-func write_data(ptr []byte, userdata interface{}) bool {
+func write_data(ptr []byte, userdata any) bool {
 	ch, ok := userdata.(chan string)
 	if ok {
 		ch <- string(ptr)
