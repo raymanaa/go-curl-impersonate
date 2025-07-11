@@ -3,7 +3,7 @@ package curl
 
 /*
 #cgo darwin,arm64 CFLAGS: -I${SRCDIR}/libs/include -DCURL_STATICLIB
-#cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/libs/darwin_arm64 -lcurl-impersonate -lresolv -lstdc++ -framework Security -framework SystemConfiguration
+#cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/libs/darwin_arm64 -lcurl-impersonate -lngtcp2_crypto_boringssl -lngtcp2 -lnghttp3 -lnghttp2 -lzstd -lbrotlienc -lbrotlidec -lbrotlicommon -lz -lssl -lcrypto -lldap -lidn2 -lresolv -framework Security -framework SystemConfiguration -lc++
 
 #cgo linux,amd64 CFLAGS: -I${SRCDIR}/libs/include -DCURL_STATICLIB
 #cgo linux,amd64 LDFLAGS: -L${SRCDIR}/libs/linux_amd64_gnu -Wl,-Bstatic -lcurl-impersonate -Wl,-Bdynamic -lssl -lcrypto -lngtcp2_crypto_boringssl -lngtcp2 -lnghttp3 -lnghttp2 -lzstd -lbrotlienc -lbrotlidec -lbrotlicommon -lz -lstdc++ -ldl -lpthread
