@@ -3,8 +3,6 @@
 package curl
 
 /*
-#cgo CFLAGS: -I/usr/include
-
 #include <stdlib.h>
 #include <curl/curl.h>
 #include "compat.h"
