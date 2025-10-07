@@ -477,7 +477,7 @@ func goStringSys(ccharPtr uintptr) string {
 	return string(unsafe.Slice((*byte)(ptr), length))
 }
 
-func (curl *CURL) Getinfo(infoConstant uint32) (any, error) {
+func (curl *CURL) Getinfo(infoConstant Info) (any, error) {
 	p := curl.handle
 	if p == nil {
 		return nil, fmt.Errorf("curl: easy handle is nil")
