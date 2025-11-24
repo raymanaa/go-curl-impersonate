@@ -170,6 +170,12 @@ func (curl *CURL) Setopt(opt EasyOpt, param any) error {
 			curl.readData = nil
 			return newCurlError(CurlEasySetoptFunction(p, int(opt), unsafe.Pointer((*struct{})(nil))))
 		}
+		f, ok := param.(func([]byte, any) int)
+		if !ok {
+			return fmt.Errorf("curl: expected func([]byte, any) int for READFUNCTION, got %T", param)
+		}
+		curl.readFunction = &f
+
 		if errCode := CurlEasySetoptPointer(p, int(OPT_READDATA), unsafe.Pointer(p)); errCode != 0 {
 			return newCurlError(errCode)
 		}
@@ -181,6 +187,12 @@ func (curl *CURL) Setopt(opt EasyOpt, param any) error {
 			curl.headerData = nil
 			return newCurlError(CurlEasySetoptFunction(p, int(opt), unsafe.Pointer((*struct{})(nil))))
 		}
+		f, ok := param.(func([]byte, any) bool)
+		if !ok {
+			return fmt.Errorf("curl: expected func([]byte, any) bool for HEADERFUNCTION, got %T", param)
+		}
+		curl.headerFunction = &f
+
 		if errCode := CurlEasySetoptPointer(p, int(OPT_HEADERDATA), unsafe.Pointer(p)); errCode != 0 {
 			return newCurlError(errCode)
 		}
