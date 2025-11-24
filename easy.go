@@ -198,6 +198,12 @@ func (curl *CURL) Setopt(opt EasyOpt, param any) error {
 		}
 		return newCurlError(CurlEasySetoptFunction(p, int(opt), GetHeaderCallbackFuncptr()))
 
+	case OPT_HEADERDATA:
+		curl.headerData = param
+		// We do NOT set the C-level WRITEDATA because HEADERFUNCTION sets it to 'p' (the context)
+		// so that the Go callback wrapper can find the context and then access curl.headerData.
+		return nil
+
 	case OPT_XFERINFOFUNCTION:
 		if param == nil {
 			curl.progressFunction = nil
