@@ -398,7 +398,13 @@ func (curl *CURL) Perform() error {
 	if p == nil {
 		return fmt.Errorf("curl: easy handle is nil")
 	}
-	return newCurlError(CurlEasyPerform(p))
+	err := newCurlError(CurlEasyPerform(p))
+
+	runtime.KeepAlive(curl.headerData)
+	runtime.KeepAlive(curl.writeData)
+	runtime.KeepAlive(curl.readData)
+	runtime.KeepAlive(curl.progressData)
+	return err
 }
 
 // curl_easy_pause - pause and unpause a connection
