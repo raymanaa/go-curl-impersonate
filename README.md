@@ -1,6 +1,8 @@
 go-curl-impersonate
 =======
 
+> **Note:** This is a temporary fork of [github.com/BridgeSenseDev/go-curl-impersonate](https://github.com/BridgeSenseDev/go-curl-impersonate). Please refer to the original repository for the latest updates. This fork exists only until the PR fixing windows build & header issues is accepted upstream.
+
 go-curl-impersonate is a GoLang interface to [libcurl-impersonate](https://github.com/lwthiker/curl-impersonate#libcurl-impersonate),
 a special build of the multiprotocol file transfer library that can impersonate major web browsers.
 Similar to the HTTP support in [net/http](https://pkg.go.dev/net/http), go-curl-impersonate can be used to

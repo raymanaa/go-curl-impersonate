@@ -1,0 +1,6 @@
+# Force LF endings for Go files (critical for build constraints)
+*.go text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
